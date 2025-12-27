@@ -1,124 +1,93 @@
 <!doctype html>
 <html lang="ja">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>受付</title>
-  <style>
-    body { font-family: sans-serif; padding: 16px; }
-    .box { max-width: 720px; margin: 0 auto; }
-    .log { white-space: pre-wrap; background: #f6f6f6; padding: 12px; border-radius: 8px; }
-    button { padding: 10px 14px; font-size: 16px; }
-  </style>
 </head>
 <body>
-  <div class="box">
-    <h2>受付画面</h2>
-    <p id="status">起動しています…</p>
-    <div class="log" id="log"></div>
-    <p id="retry" style="display:none;">
-      <button id="retryBtn">もう一度送信して進む</button>
-    </p>
-  </div>
+  <h2>受付画面</h2>
+  <div id="status">初期化中…</div>
 
   <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
   <script>
-    // ★ここだけあなたの「次に進ませたいURL」に置換してください（https必須）
-    const NEXT_URL = "https://example.com/next-form";
+    // ====== ここだけ設定 ======
+    const LIFF_ID = "あなたのLIFF_ID";
+    // Workers の /api/liff-start に合わせる
+    const API_ENDPOINT = "https://あなたのWorkersドメイン/api/liff-start";
+    // ==========================
 
-    const LIFF_ID = "2008682179-Y0OojOhA";
-
-    const $status = document.getElementById("status");
-    const $log = document.getElementById("log");
-    const $retry = document.getElementById("retry");
-    const $retryBtn = document.getElementById("retryBtn");
-
-    function log(s) {
-      $log.textContent += (s + "\n");
-    }
-
-    function getBizId() {
+    function qs(name) {
       const u = new URL(location.href);
-      return (u.searchParams.get("biz") || "").trim();
+      return u.searchParams.get(name) || "";
     }
 
-    function buildNextUrl(bizId) {
-      const u = new URL(NEXT_URL);
-      if (bizId) u.searchParams.set("biz", bizId);
-      return u.toString();
-    }
-
-    async function ensureLogin() {
-      if (!liff.isLoggedIn()) {
-        log("未ログインのためログインします");
-        liff.login({ redirectUri: location.href });
-        return false; // ここで一旦遷移するので処理終了
-      }
-      return true;
-    }
-
-    async function sendStartMessage(bizId) {
-      // 送る文言は必要に応じて変えてOK
-      const text = bizId ? `開始:${bizId}` : "開始";
-      log("送信テキスト: " + text);
-
-      // LINE内ブラウザで開かれていない場合（外部ブラウザ）は sendMessages できない
-      if (!liff.isInClient()) {
-        throw new Error("LINEアプリ内で開かれていません（外部ブラウザ）。QRは必ずLINEで開く必要があります。");
-      }
-
-      await liff.sendMessages([{ type: "text", text }]);
-      log("sendMessages 成功");
-    }
-
-    async function goNext(bizId) {
-      const next = buildNextUrl(bizId);
-      log("次URLへ遷移: " + next);
-
-      // LINE内でそのまま開きたいなら external:false
-      // （外部で開いて良いなら external:true）
-      liff.openWindow({ url: next, external: false });
+    function setStatus(msg) {
+      document.getElementById("status").textContent = msg;
     }
 
     async function main() {
-      try {
-        $status.textContent = "LIFF初期化中…";
-        log("location.href=" + location.href);
+      const biz = qs("biz");                 // 事業者ID（QRに入っている）
+      const bizNameFromQr = qs("bizName");   // 事業者名（QRに入れてもOK / 省略可）
 
-        const bizId = getBizId();
-        log("biz=" + bizId);
-
-        await liff.init({ liffId: LIFF_ID });
-        log("liff.init OK");
-        log("isInClient=" + liff.isInClient());
-        log("isLoggedIn=" + liff.isLoggedIn());
-
-        const ok = await ensureLogin();
-        if (!ok) return;
-
-        $status.textContent = "開始メッセージ送信中…";
-        await sendStartMessage(bizId);
-
-        $status.textContent = "次の画面へ進みます…";
-        await goNext(bizId);
-
-        // openWindow したら基本ここには戻らない想定だが、万一戻った時用
-        $status.textContent = "遷移しました。戻らない場合はLINEの画面をご確認ください。";
-
-      } catch (e) {
-        $status.textContent = "エラーが発生しました。";
-        log("ERROR: " + (e && e.message ? e.message : String(e)));
-        $retry.style.display = "block";
+      if (!biz) {
+        setStatus("URLに biz がありません。QRのURLを確認してください。");
+        return;
       }
+
+      setStatus("LIFFを初期化中…");
+      await liff.init({ liffId: LIFF_ID });
+
+      if (!liff.isLoggedIn()) {
+        setStatus("ログインが必要です。ログインへ移動します…");
+        // QR→LIFFの導線で未ログインがあり得るのでログインさせる
+        liff.login({ redirectUri: location.href });
+        return;
+      }
+
+      setStatus("ユーザー情報を取得中…");
+      const profile = await liff.getProfile(); // userId を取得
+      const userId = profile.userId || "";
+
+      if (!userId) {
+        setStatus("userIdを取得できませんでした。");
+        return;
+      }
+
+      // idToken（サーバで検証＆改ざん対策に使える）
+      const idToken = liff.getIDToken() || "";
+
+      setStatus("受付情報を送信中…");
+      const payload = {
+        biz,
+        bizName: bizNameFromQr, // 空でもOK（空ならサーバ側でIDから引く）
+        userId,
+        idToken,
+        pageUrl: location.href
+      };
+
+      const res = await fetch(API_ENDPOINT, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+
+      const text = await res.text();
+      if (!res.ok) {
+        setStatus("送信に失敗しました: " + text);
+        return;
+      }
+
+      setStatus("受付が完了しました。LINEに反映しました。画面を閉じます…");
+      setTimeout(() => {
+        // LINE内ブラウザなら閉じる
+        try { liff.closeWindow(); } catch (e) {}
+      }, 900);
     }
 
-    $retryBtn.addEventListener("click", () => {
-      $retry.style.display = "none";
-      $log.textContent = "";
-      main();
+    main().catch(err => {
+      setStatus("エラー: " + (err && err.message ? err.message : String(err)));
     });
-
-    main();
   </script>
 </body>
 </html>
