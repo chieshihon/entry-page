@@ -1,102 +1,124 @@
 <!doctype html>
 <html lang="ja">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>受付</title>
+  <style>
+    body { font-family: sans-serif; padding: 16px; }
+    .box { max-width: 720px; margin: 0 auto; }
+    .log { white-space: pre-wrap; background: #f6f6f6; padding: 12px; border-radius: 8px; }
+    button { padding: 10px 14px; font-size: 16px; }
+  </style>
 </head>
 <body>
-  <h2>受付画面</h2>
-  <div id="status">初期化中…</div>
-  <div id="actions" style="margin-top:16px;"></div>
+  <div class="box">
+    <h2>受付画面</h2>
+    <p id="status">起動しています…</p>
+    <div class="log" id="log"></div>
+    <p id="retry" style="display:none;">
+      <button id="retryBtn">もう一度送信して進む</button>
+    </p>
+  </div>
 
   <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
   <script>
-    // ====== ここだけ自分の値にする ======
+    // ★ここだけあなたの「次に進ませたいURL」に置換してください（https必須）
+    const NEXT_URL = "https://example.com/next-form";
+
     const LIFF_ID = "2008682179-Y0OojOhA";
-    // 次に進ませたいURL（GitHub PagesでもGoogleフォームでもOK）
-    const NEXT_URL = "https://chieshihon.github.io/entry-page/accept.html";
-    // 送信先（Bot）へ送る文言（bizだけでも確実に通す）
-    const MESSAGE_TEMPLATE = (biz) => `受付開始 biz=${biz}`;
-    // ===================================
 
     const $status = document.getElementById("status");
-    const $actions = document.getElementById("actions");
+    const $log = document.getElementById("log");
+    const $retry = document.getElementById("retry");
+    const $retryBtn = document.getElementById("retryBtn");
 
-    function setStatus(t) { $status.textContent = t; }
+    function log(s) {
+      $log.textContent += (s + "\n");
+    }
 
-    function getBizParam() {
+    function getBizId() {
       const u = new URL(location.href);
       return (u.searchParams.get("biz") || "").trim();
     }
 
-    function buildLineAppUrl() {
-      // LINE外で開かれた時に、LINEアプリ内で開き直す用
-      // クエリもそのまま引き継ぐ
-      return "line://app/" + LIFF_ID + location.search;
+    function buildNextUrl(bizId) {
+      const u = new URL(NEXT_URL);
+      if (bizId) u.searchParams.set("biz", bizId);
+      return u.toString();
     }
 
-    function showOpenInLineButton() {
-      $actions.innerHTML = "";
-      const a = document.createElement("a");
-      a.href = buildLineAppUrl();
-      a.textContent = "LINEで開く";
-      a.style.display = "inline-block";
-      a.style.padding = "12px 16px";
-      a.style.border = "1px solid #333";
-      a.style.borderRadius = "8px";
-      a.style.textDecoration = "none";
-      $actions.appendChild(a);
+    async function ensureLogin() {
+      if (!liff.isLoggedIn()) {
+        log("未ログインのためログインします");
+        liff.login({ redirectUri: location.href });
+        return false; // ここで一旦遷移するので処理終了
+      }
+      return true;
+    }
+
+    async function sendStartMessage(bizId) {
+      // 送る文言は必要に応じて変えてOK
+      const text = bizId ? `開始:${bizId}` : "開始";
+      log("送信テキスト: " + text);
+
+      // LINE内ブラウザで開かれていない場合（外部ブラウザ）は sendMessages できない
+      if (!liff.isInClient()) {
+        throw new Error("LINEアプリ内で開かれていません（外部ブラウザ）。QRは必ずLINEで開く必要があります。");
+      }
+
+      await liff.sendMessages([{ type: "text", text }]);
+      log("sendMessages 成功");
+    }
+
+    async function goNext(bizId) {
+      const next = buildNextUrl(bizId);
+      log("次URLへ遷移: " + next);
+
+      // LINE内でそのまま開きたいなら external:false
+      // （外部で開いて良いなら external:true）
+      liff.openWindow({ url: next, external: false });
     }
 
     async function main() {
-      const biz = getBizParam();
-      if (!biz) {
-        setStatus("URLに biz がありません。例：?biz=123");
-        return;
+      try {
+        $status.textContent = "LIFF初期化中…";
+        log("location.href=" + location.href);
+
+        const bizId = getBizId();
+        log("biz=" + bizId);
+
+        await liff.init({ liffId: LIFF_ID });
+        log("liff.init OK");
+        log("isInClient=" + liff.isInClient());
+        log("isLoggedIn=" + liff.isLoggedIn());
+
+        const ok = await ensureLogin();
+        if (!ok) return;
+
+        $status.textContent = "開始メッセージ送信中…";
+        await sendStartMessage(bizId);
+
+        $status.textContent = "次の画面へ進みます…";
+        await goNext(bizId);
+
+        // openWindow したら基本ここには戻らない想定だが、万一戻った時用
+        $status.textContent = "遷移しました。戻らない場合はLINEの画面をご確認ください。";
+
+      } catch (e) {
+        $status.textContent = "エラーが発生しました。";
+        log("ERROR: " + (e && e.message ? e.message : String(e)));
+        $retry.style.display = "block";
       }
-
-      setStatus("LIFF初期化中…");
-      await liff.init({ liffId: LIFF_ID });
-
-      // LINEアプリ内（LIFFクライアント）で開かれていない場合は、LINEで開く導線を出す
-      if (!liff.isInClient()) {
-        setStatus("いまはLINE外で開かれています。LINEで開いてください。");
-        showOpenInLineButton();
-        return;
-      }
-
-      // LINE内でも、未ログインならログイン（必要な場合のみ）
-      if (!liff.isLoggedIn()) {
-        setStatus("ログイン中…");
-        liff.login({ redirectUri: location.href });
-        return;
-      }
-
-      setStatus("メッセージ送信中…");
-      await liff.sendMessages([
-        { type: "text", text: MESSAGE_TEMPLATE(biz) }
-      ]);
-
-      // 送信できたら次URLへ遷移（ここが“閉じるで終わる”を避ける要点）
-      setStatus("送信完了。次へ進みます…");
-      const next = NEXT_URL + "?biz=" + encodeURIComponent(biz);
-
-      // まずはLIFF内遷移（安定）
-      location.replace(next);
     }
 
-    main().catch((e) => {
-      console.error(e);
-      setStatus("エラー: " + (e && e.message ? e.message : String(e)));
-
-      // LINE外の可能性が高い時は導線を出す
-      try {
-        if (typeof liff !== "undefined" && liff && !liff.isInClient()) {
-          showOpenInLineButton();
-        }
-      } catch (_) {}
+    $retryBtn.addEventListener("click", () => {
+      $retry.style.display = "none";
+      $log.textContent = "";
+      main();
     });
+
+    main();
   </script>
 </body>
 </html>
