@@ -1,13 +1,102 @@
 <!doctype html>
 <html lang="ja">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>受付</title>
 </head>
 <body>
   <h2>受付画面</h2>
-  <p>ここが表示されれば成功です。</p>
+  <div id="status">初期化中…</div>
+  <div id="actions" style="margin-top:16px;"></div>
+
+  <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+  <script>
+    // ====== ここだけ自分の値にする ======
+    const LIFF_ID = "2008682179-Y0OojOhA";
+    // 次に進ませたいURL（GitHub PagesでもGoogleフォームでもOK）
+    const NEXT_URL = "https://chieshihon.github.io/entry-page/accept.html";
+    // 送信先（Bot）へ送る文言（bizだけでも確実に通す）
+    const MESSAGE_TEMPLATE = (biz) => `受付開始 biz=${biz}`;
+    // ===================================
+
+    const $status = document.getElementById("status");
+    const $actions = document.getElementById("actions");
+
+    function setStatus(t) { $status.textContent = t; }
+
+    function getBizParam() {
+      const u = new URL(location.href);
+      return (u.searchParams.get("biz") || "").trim();
+    }
+
+    function buildLineAppUrl() {
+      // LINE外で開かれた時に、LINEアプリ内で開き直す用
+      // クエリもそのまま引き継ぐ
+      return "line://app/" + LIFF_ID + location.search;
+    }
+
+    function showOpenInLineButton() {
+      $actions.innerHTML = "";
+      const a = document.createElement("a");
+      a.href = buildLineAppUrl();
+      a.textContent = "LINEで開く";
+      a.style.display = "inline-block";
+      a.style.padding = "12px 16px";
+      a.style.border = "1px solid #333";
+      a.style.borderRadius = "8px";
+      a.style.textDecoration = "none";
+      $actions.appendChild(a);
+    }
+
+    async function main() {
+      const biz = getBizParam();
+      if (!biz) {
+        setStatus("URLに biz がありません。例：?biz=123");
+        return;
+      }
+
+      setStatus("LIFF初期化中…");
+      await liff.init({ liffId: LIFF_ID });
+
+      // LINEアプリ内（LIFFクライアント）で開かれていない場合は、LINEで開く導線を出す
+      if (!liff.isInClient()) {
+        setStatus("いまはLINE外で開かれています。LINEで開いてください。");
+        showOpenInLineButton();
+        return;
+      }
+
+      // LINE内でも、未ログインならログイン（必要な場合のみ）
+      if (!liff.isLoggedIn()) {
+        setStatus("ログイン中…");
+        liff.login({ redirectUri: location.href });
+        return;
+      }
+
+      setStatus("メッセージ送信中…");
+      await liff.sendMessages([
+        { type: "text", text: MESSAGE_TEMPLATE(biz) }
+      ]);
+
+      // 送信できたら次URLへ遷移（ここが“閉じるで終わる”を避ける要点）
+      setStatus("送信完了。次へ進みます…");
+      const next = NEXT_URL + "?biz=" + encodeURIComponent(biz);
+
+      // まずはLIFF内遷移（安定）
+      location.replace(next);
+    }
+
+    main().catch((e) => {
+      console.error(e);
+      setStatus("エラー: " + (e && e.message ? e.message : String(e)));
+
+      // LINE外の可能性が高い時は導線を出す
+      try {
+        if (typeof liff !== "undefined" && liff && !liff.isInClient()) {
+          showOpenInLineButton();
+        }
+      } catch (_) {}
+    });
+  </script>
 </body>
 </html>
-
